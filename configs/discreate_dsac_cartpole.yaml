@@ -1,0 +1,47 @@
+# dsac/configs/dsac_christodoulou_cartpole.yaml
+
+# Environment settings
+env_id: "CartPole-v1"
+
+# Trainer settings
+agent_module: "sac_das.dsac.agent" # Path to the agent module relative to 'dsac' package
+agent_class: "DSAC"                 # Class name of the agent
+
+training_total_timesteps: 100000     # CartPole learns quickly
+max_steps_per_episode: 500        # Max steps for CartPole-v1 episode
+log_interval_timesteps: 1000      # How often to log terminal summary & train/* TB logs
+eval_frequency_timesteps: 2000    # How often to run dedicated evaluation
+n_eval_episodes: 10               # Number of episodes for each evaluation
+save_freq_episodes: 50            # How often to save a model checkpoint
+
+log_root: "dsac/data/runs/dsac"      # Root directory for TensorBoard logs for this experiment type
+model_root: "dsac/data/models/dsac"    # Root directory for saved models for this experiment type
+
+# Agent Hyperparameters (passed to Trainer, then to DSAC Agent constructor)
+# obs_shapes_or_space: Set by run_example.py from env.observation_space.shape for flat obs
+# action_spec_for_buffer: Set by run_example.py from env.action_space for discrete obs
+
+use_encoder: False                  # CartPole has flat observations
+encoder_mlp_hidden_dims: []         # For SimpleMLPEncoder: empty means it acts like IdentityEncoder
+                                    # (e.g., [64] if you want a small MLP encoder layer)
+# Network body hidden dimensions (passed to ActorNetworkDiscrete and CriticNetworkDiscrete)
+# These are for the MLP layers *after* the encoder.
+hidden_dims_actor_body: [64, 64]    # Smaller network for CartPole
+hidden_dims_critic_body: [64, 64]   # Smaller network for CartPole
+
+gamma: 0.99                         # Discount factor
+tau: 0.005                          # Soft update coefficient
+alpha_init: 'auto' 
+alpha_lr: 0.0001                 # Entropy regularization coefficient ("auto" or a float value)
+                                    # For "auto", target_entropy will be ~0.98 * log(num_actions)
+critic_lr: 0.001                    # Learning rate for critics and alpha (can be higher for simpler envs)
+actor_lr: 0.001                     # Learning rate for actor (can be higher for simpler envs)
+
+replay_buffer_size: 50000           # Can be smaller for CartPole
+batch_size: 64                      # Smaller batch size often works for CartPole
+learning_starts: 500                # Start learning relatively early
+gradient_steps: 1                   # Gradient updates per environment step
+policy_delay: 1                     # Update actor/alpha at same frequency as critic (common for DSAC)
+max_grad_norm: 1.0                  # Enable gradient clipping, or null to disable
+reward_scale: 1.0                   # Usually not needed for CartPole
+aux_data_specs_for_buffer: null     # No auxiliary data for this simple test

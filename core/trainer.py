@@ -6,8 +6,7 @@ import gymnasium as gym
 from datetime import datetime
 from torch.utils.tensorboard import SummaryWriter
 
-# Since Trainer is in core, BaseAgent is in the same directory (or submodule)
-from .base_agent import BaseAgent  # For type hinting
+from .base_agent import BaseAgent
 
 
 class BaseCallback:
@@ -23,45 +22,36 @@ class BaseCallback:
         self.logger = None  # type: SummaryWriter
 
     def _on_training_start(self):
-        """Called before the first episode of training."""
         pass
 
     def on_training_start(self):
         self._on_training_start()
 
     def _on_training_end(self):
-        """Called after the training loop is finished."""
         pass
 
     def on_training_end(self):
         self._on_training_end()
 
     def _on_episode_start(self):
-        """Called at the beginning of each episode."""
         pass
 
     def on_episode_start(self):
         self._on_episode_start()
 
     def _on_step(self) -> bool:
-        """
-        Called after each `env.step()`.
-        :return: (bool) If the callback returns False, training is aborted early.
-        """
         return True
 
     def on_step(self) -> bool:
         return self._on_step()
 
     def _on_rollout_end(self):
-        """Called after collecting all steps in an episode, before any learning for that episode's data."""
         pass
 
     def on_rollout_end(self):
         self._on_rollout_end()
 
     def _on_episode_end(self):
-        """Called after the episode loop, including all learning updates triggered by that episode's steps."""
         pass
 
     def on_episode_end(self):
@@ -84,17 +74,21 @@ class Trainer:
         model_root: str = "models_dsac",
         save_freq_episodes: int = 100,
         callback=None,
+        # Agent Hyperparameters:
         obs_shapes_or_space=None,
         use_encoder: bool = False,
         encoder_mlp_hidden_dims: list = None,
+        hidden_dims_actor_body: list = None,
+        hidden_dims_critic_body: list = None,
         gamma: float = 0.99,
         tau: float = 0.005,
         alpha_init="auto",
         critic_lr: float = 3e-4,
         actor_lr: float = 3e-4,
+        alpha_lr: float = 3e-4,
         replay_buffer_size: int = 1_000_000,
         batch_size: int = 256,
-        learning_starts: int = 100,
+        learning_starts: int = 1000,
         gradient_steps: int = 1,
         policy_delay: int = 2,
         max_grad_norm: float = None,
@@ -146,11 +140,14 @@ class Trainer:
             'obs_shapes_or_space': obs_shapes_or_space,
             'use_encoder': use_encoder,
             'encoder_mlp_hidden_dims': encoder_mlp_hidden_dims or [],
+            'hidden_dims_actor_body': hidden_dims_actor_body if hidden_dims_actor_body is not None else [256, 256],
+            'hidden_dims_critic_body': hidden_dims_critic_body if hidden_dims_critic_body is not None else [256, 256],
             'gamma': gamma,
             'tau': tau,
             'alpha_init': alpha_init,
             'critic_lr': critic_lr,
             'actor_lr': actor_lr,
+            'alpha_lr': alpha_lr,
             'replay_buffer_size': replay_buffer_size,
             'batch_size': batch_size,
             'learning_starts': learning_starts,
@@ -193,20 +190,29 @@ class Trainer:
 
     def _save_hyperparameters(self):
         agent_constructor_serializable = {k: v for k, v in self.agent_constructor_hparams.items() if k != 'env'}
-        for k, v in agent_constructor_serializable.items():
-            if isinstance(v, type):
-                agent_constructor_serializable[k] = str(v)
-            elif isinstance(v, gym.spaces.Dict) and k == 'obs_shapes_or_space':
-                agent_constructor_serializable[k] = {key_s: str(sp.shape) for key_s, sp in v.spaces.items()}
-            elif isinstance(v, (np.ndarray, gym.spaces.Space, tuple)) and k not in ['action_shape']:
-                agent_constructor_serializable[k] = str(v)
-            elif isinstance(v, tuple) and not isinstance(v, str):
-                agent_constructor_serializable[k] = str(v)
+
+        # Use a helper for robust sanitization
+        def sanitize_value(val):
+            if isinstance(val, type): return str(val)
+            if isinstance(val, gym.spaces.Dict): return {key_s: str(sp.shape) for key_s, sp in val.spaces.items()}
+            if isinstance(val, (np.integer, np.int_)): return int(val)
+            if isinstance(val, (np.floating, np.float_)): return float(val)
+            if isinstance(val, (np.ndarray, gym.spaces.Space, tuple)) and not isinstance(val, str): return str(val)
+            if isinstance(val, list): return [sanitize_value(item) for item in val]
+            if isinstance(val, dict): return {k_dict: sanitize_value(v_dict) for k_dict, v_dict in val.items()}
+            return val
+
+        for k, v_orig in agent_constructor_serializable.items():
+            agent_constructor_serializable[k] = sanitize_value(v_orig)
+
+        agent_internal_hparams_s = {}
+        if hasattr(self.agent, 'hparams') and self.agent.hparams is not None:
+            agent_internal_hparams_s = self._sanitize_hparams_for_json_recursive(self.agent.hparams)
 
         all_hparams = {
-            "trainer_hyperparameters": self.trainer_hparams,
+            "trainer_hyperparameters": self._sanitize_hparams_for_json_recursive(self.trainer_hparams),
             "agent_constructor_hyperparameters_passed": agent_constructor_serializable,
-            "agent_internal_hyperparameters": self.agent.hparams if hasattr(self.agent, 'hparams') else {}
+            "agent_internal_hyperparameters": agent_internal_hparams_s
         }
         filepath = os.path.join(self.model_dir_run, "hyperparameters.json")
         try:
@@ -214,22 +220,49 @@ class Trainer:
                 json.dump(all_hparams, f, indent=4, sort_keys=True)
         except TypeError as e:
             print(f"Warning: Could not serialize all HPs to JSON: {e}")
-            print(f"Problematic HPs (agent_constructor_serializable dump):")
-            for key, val in agent_constructor_serializable.items():
-                print(f"  {key}: {val} (type: {type(val)})")
+            print(f"Problematic HPs (all_hparams dump):")
+
+            def print_dict_types(d, indent_level=0):
+                for key, value in d.items():
+                    print('  ' * indent_level + str(key) +
+                          f" (type: {type(value)}) : {str(value)[:100]}")  # Print part of value
+                    if isinstance(value, dict): print_dict_types(value, indent_level + 1)
+
+            print_dict_types(all_hparams)
         except Exception as e_gen:
             print(f"An unexpected error occurred during HP saving: {e_gen}")
+
+    def _sanitize_hparams_for_json_recursive(self, params_dict):
+        """ Helper to recursively sanitize a dictionary for JSON. """
+        if params_dict is None: return None
+        sanitized = {}
+        for k, v in params_dict.items():
+            if isinstance(v, dict):
+                sanitized[k] = self._sanitize_hparams_for_json_recursive(v)
+            elif isinstance(v, list):
+                sanitized[k] = [
+                    self._sanitize_hparams_for_json_recursive(i) if isinstance(i, dict) else sanitize_value(i)
+                    for i in v
+                ]
+            else:
+                sanitized[k] = sanitize_value(v)  # Use a global sanitize_value if it exists or define here
+        return sanitized
 
     def _setup_agent_instance(self):
         kwargs_for_agent = dict(self.agent_constructor_hparams)
         valid_agent_params = list(self.agent_class.__init__.__code__.co_varnames)
+
+        # Ensure 'env' is present if the agent expects it
         if 'env' in valid_agent_params and 'env' not in kwargs_for_agent:
             kwargs_for_agent['env'] = self.env
+
         filtered_kwargs_for_agent = {k: v for k, v in kwargs_for_agent.items() if k in valid_agent_params}
+
         if 'obs_shapes_or_space' not in filtered_kwargs_for_agent and \
            'obs_shapes_or_space' in valid_agent_params and \
            'obs_shapes_or_space' in kwargs_for_agent:
             filtered_kwargs_for_agent['obs_shapes_or_space'] = kwargs_for_agent['obs_shapes_or_space']
+
         agent_instance = self.agent_class(**filtered_kwargs_for_agent)
         return agent_instance
 
@@ -276,14 +309,12 @@ class Trainer:
         mean_reward, mean_length = np.mean(eval_rewards), np.mean(eval_lengths)
         self.writer.add_scalar("eval/mean_reward", mean_reward, self.total_timesteps)
         self.writer.add_scalar("eval/mean_episode_length", mean_length, self.total_timesteps)
-
         if mean_reward > self.best_mean_eval_reward:
             print(
                 f"Eval: New best eval reward: {mean_reward:.2f} (old: {self.best_mean_eval_reward:.2f}). Saving best model..."
             )
             self.best_mean_eval_reward = mean_reward
             self.agent.save_models(best_model=True)
-        # else: print(f"Eval: Mean Reward: {mean_reward:.2f}, Mean Length: {mean_length:.2f}") # Less verbose
         self.last_eval_timestep = self.total_timesteps
 
     def _log_terminal_summary(self, mean_rollout_reward, mean_rollout_length, interval_fps, total_time_elapsed):
@@ -310,45 +341,51 @@ class Trainer:
         def format_label_cell(text, indent_level=0):
             return f"{'  '*indent_level}{text}".ljust(LABEL_CONTENT_WIDTH)
 
-        def format_value_cell(value, precision_format_char):
-            # Check if value is a string first (like the "Value" header or empty string for section rows)
-            if isinstance(value, str):
-                val_str = value  # Keep it as is for simple string values
-            # Check for actual numeric types that could be NaN
-            elif isinstance(value,
-                            (int, float, np.number)) and np.isnan(value):  # np.number covers numpy int/float types
-                val_str = "nan"
-            # Proceed with numeric formatting if not a string and not NaN
-            elif precision_format_char == 'd':  # Integer
-                # Ensure value is convertible to int if it's not already NaN
-                val_str = f"{int(value):d}" if not (isinstance(value, float) and np.isnan(value)) else "nan"
-            elif 'e' in precision_format_char:  # Scientific
-                val_str = f"{value:{precision_format_char}}" if not (isinstance(value, float)
-                                                                     and np.isnan(value)) else "nan"
-            else:  # Default to float with specified precision (e.g., .2f, .3f, .5f)
-                val_str = f"{value:{precision_format_char}}" if not (isinstance(value, float)
-                                                                     and np.isnan(value)) else "nan"
+        def format_value_cell(value, base_format_char, text_label_for_precision=""):
+            fmt_str_final = ""
+            if base_format_char == 'd': fmt_str_final = "d"
+            elif base_format_char == 'e': fmt_str_final = ".2e"
+            elif base_format_char == 'f': fmt_str_final = ".2f"
 
-            return val_str.rjust(VALUE_CONTENT_WIDTH)
+            if text_label_for_precision == "  actor_loss": fmt_str_final = ".3f"
+            elif text_label_for_precision == "  critic_loss": fmt_str_final = ".3f"
+            elif text_label_for_precision == "  ent_coef_loss": fmt_str_final = ".3f"
+            elif text_label_for_precision == "  ent_coef": fmt_str_final = ".5f"
+            elif text_label_for_precision == "  learning_rate": fmt_str_final = ".1e"
+
+            val_str_out = ""
+            if isinstance(value, str):
+                val_str_out = value
+            elif isinstance(value, (int, float, np.number)) and np.isnan(value):
+                val_str_out = "nan"
+            elif base_format_char == 'd':  # Check if it's meant to be an int
+                val_str_out = f"{int(value):d}" if not (isinstance(value, float) and np.isnan(value)) else "nan"
+            elif fmt_str_final:  # If we have a format string (float or scientific)
+                val_str_out = f"{value:{fmt_str_final}}" if not (isinstance(value, float)
+                                                                 and np.isnan(value)) else "nan"
+            else:  # Fallback for empty fmt_str if value is numeric (e.g. for "Value" header's empty value cell)
+                val_str_out = str(value) if not (isinstance(value, float) and np.isnan(value)) else "nan"
+
+            return val_str_out.rjust(VALUE_CONTENT_WIDTH)
 
         print("\n" + "-" * TOTAL_LINE_WIDTH)
-        print(f"| {format_label_cell('Section/Metric')} | {format_value_cell('Value', '')} |")
+        print(f"| {format_label_cell('Section/Metric')} | {format_value_cell('Value', '', 'Value')} |")
         line_sep = f"|{'-'*(LABEL_CONTENT_WIDTH + 2)}|{'-'*(VALUE_CONTENT_WIDTH + 2)}|"
         print(line_sep)
 
         sections = {
-            "rollout/": [("ep_len_mean", mean_rollout_length, '.2f'), ("ep_rew_mean", mean_rollout_reward, '.2e')],
+            "rollout/": [("ep_len_mean", mean_rollout_length, 'f'), ("ep_rew_mean", mean_rollout_reward, 'e')],
             "time/": [("episodes", self.total_episodes_completed, 'd'), ("fps", interval_fps, 'd'),
                       ("time_elapsed", int(total_time_elapsed), 'd'), ("total_timesteps", self.total_timesteps, 'd')],
-            "train/": [("actor_loss", actor_loss_val, '.3f'), ("critic_loss", critic_loss_val, '.3f'),
-                       ("ent_coef", ent_coef_val, '.5f'), ("ent_coef_loss", ent_coef_loss_val, '.3f'),
-                       ("learning_rate", actor_lr_val, '.1e'), ("n_updates", n_updates_val, 'd')]
+            "train/": [("actor_loss", actor_loss_val, 'f'), ("critic_loss", critic_loss_val, 'f'),
+                       ("ent_coef", ent_coef_val, 'f'), ("ent_coef_loss", ent_coef_loss_val, 'f'),
+                       ("learning_rate", actor_lr_val, 'e'), ("n_updates", n_updates_val, 'd')]
         }
         for section_name, metrics in sections.items():
-            print(f"| {format_label_cell(section_name)} | {format_value_cell('', '')} |")
-            for label_text, value, specific_format_char in metrics:
+            print(f"| {format_label_cell(section_name)} | {format_value_cell('', '', section_name)} |")
+            for label_text, value, base_fmt_char in metrics:
                 print(
-                    f"| {format_label_cell(label_text, indent_level=1)} | {format_value_cell(value, specific_format_char)} |"
+                    f"| {format_label_cell(label_text, indent_level=1)} | {format_value_cell(value, base_fmt_char, f'  {label_text}')} |"
                 )
             if section_name != list(sections.keys())[-1]: print(line_sep)
         print("-" * TOTAL_LINE_WIDTH)
@@ -377,12 +414,22 @@ class Trainer:
                 next_observation, reward, terminated, truncated, info_step = self.env.step(action)
                 done = terminated or truncated
 
-                obs_buffer_keys = list(self.agent._get_obs_shapes_for_buffer().keys())
-                current_obs_dict = observation if isinstance(observation, dict) else {obs_buffer_keys[0]: observation}
-                next_obs_dict = next_observation if isinstance(next_observation, dict) else {
-                    obs_buffer_keys[0]: next_observation
-                }
-                self.agent.remember(current_obs_dict, action, reward, next_obs_dict, done)
+                obs_buffer_format_keys = list(self.agent._get_obs_shapes_for_buffer().keys())
+                # Ensure observation is a dict for remember if buffer expects dict keys
+                current_obs_dict = observation
+                if not isinstance(observation, dict) and len(obs_buffer_format_keys) == 1:
+                    current_obs_dict = {obs_buffer_format_keys[0]: observation}
+
+                next_obs_dict = next_observation
+                if not isinstance(next_observation, dict) and len(obs_buffer_format_keys) == 1:
+                    next_obs_dict = {obs_buffer_format_keys[0]: next_observation}
+
+                self.agent.remember(current_obs_dict,
+                                    action,
+                                    reward,
+                                    next_obs_dict,
+                                    done,
+                                    aux_data=info_step.get("aux_data"))
 
                 self.total_timesteps += 1
                 episode_steps += 1
@@ -432,17 +479,20 @@ class Trainer:
                         "train/critic_loss",
                         self._train_metric_accumulators["critic_loss"] / self._train_metric_counts["critic_loss"],
                         self.total_timesteps)
-                    if hasattr(self.agent, 'entropy_tuning'
-                               ) and self.agent.entropy_tuning and self._train_metric_counts["ent_coef_loss"] > 0:
+                    if hasattr(self.agent,
+                               'entropy_tuning') and self.agent.entropy_tuning and self._train_metric_counts.get(
+                                   "ent_coef_loss", 0) > 0:
                         self.writer.add_scalar(
                             "train/ent_coef_loss", self._train_metric_accumulators["ent_coef_loss"] /
                             self._train_metric_counts["ent_coef_loss"], self.total_timesteps)
 
                 ent_coef_val_tb = self.agent.alpha.item() if hasattr(
                     self.agent, 'alpha') and self.agent.alpha is not None else np.nan
-                actor_lr_val_tb = self.agent.actor.optimizer.param_groups[0]['lr'] if hasattr(
-                    self.agent, 'actor') and self.agent.actor and hasattr(
-                        self.agent.actor, 'optimizer') and self.agent.actor.optimizer.param_groups else np.nan
+                actor_lr_val_tb = np.nan
+                if hasattr(self.agent, 'actor') and self.agent.actor and hasattr(
+                        self.agent.actor, 'optimizer') and self.agent.actor.optimizer.param_groups:
+                    actor_lr_val_tb = self.agent.actor.optimizer.param_groups[0]['lr']
+
                 self.writer.add_scalar("train/ent_coef", ent_coef_val_tb, self.total_timesteps)
                 if not np.isnan(actor_lr_val_tb):
                     self.writer.add_scalar("train/learning_rate", actor_lr_val_tb, self.total_timesteps)
@@ -456,7 +506,8 @@ class Trainer:
                 self.last_log_time = curr_time
                 self._reset_train_metric_accumulators()
 
-            if self.total_timesteps - self.last_eval_timestep >= self.eval_frequency_timesteps and self.total_timesteps > 0:
+            if self.total_timesteps > 0 and (self.total_timesteps -
+                                             self.last_eval_timestep) >= self.eval_frequency_timesteps:
                 self._run_evaluation()
             if current_episode_num > 0 and current_episode_num % self.save_freq_episodes == 0:
                 self.agent.save_models(best_model=False)
@@ -474,3 +525,15 @@ class Trainer:
             self.eval_env.close()
         if hasattr(self.env, 'close'): self.env.close()
         print("Trainer closed.")
+
+
+# Helper function (can be outside class or static if sanitize_value doesn't need self)
+def sanitize_value(val):
+    if isinstance(val, type): return str(val)
+    if isinstance(val, gym.spaces.Dict): return {key_s: str(sp.shape) for key_s, sp in val.spaces.items()}
+    if isinstance(val, np.integer): return int(val)
+    if isinstance(val, np.floating): return float(val)
+    if isinstance(val, (np.ndarray, gym.spaces.Space, tuple)) and not isinstance(val, str): return str(val)
+    if isinstance(val, list): return [sanitize_value(item) for item in val]  # Recursive for lists
+    # if isinstance(val, dict): return {k_dict: sanitize_value(v_dict) for k_dict, v_dict in val.items()} # Recursive for dicts handled by main loop
+    return val

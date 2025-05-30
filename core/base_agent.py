@@ -2,29 +2,26 @@
 import os
 import numpy as np
 import torch as T
-# from torch.utils.tensorboard import SummaryWriter # Trainer will manage and pass writer
 from abc import ABC, abstractmethod
 from .replay_buffer import ReplayBuffer
 
 
 class BaseAgent(ABC):
 
-    def __init__(
-            self,
-            env,
-            gamma=0.99,
-            tau=0.005,
-            replay_buffer_size=1_000_000,
-            batch_size=256,
-            learning_starts=1000,
-            gradient_steps=1,
-            policy_delay=2,
-            max_grad_norm=None,
-            chkpt_dir="tmp/base_agent",  # Should be overridden by subclass
-            # For Replay Buffer flexibility:
-        action_shape=None,
-            action_dtype=np.float32,
-            aux_data_specs=None):
+    def __init__(self,
+                 env,
+                 gamma=0.99,
+                 tau=0.005,
+                 replay_buffer_size=1_000_000,
+                 batch_size=256,
+                 learning_starts=1000,
+                 gradient_steps=1,
+                 policy_delay=2,
+                 max_grad_norm=None,
+                 chkpt_dir="tmp/base_agent",
+                 action_shape=None,
+                 action_dtype=np.float32,
+                 aux_data_specs=None):
 
         self.env = env
         self.gamma = gamma
@@ -39,7 +36,8 @@ class BaseAgent(ABC):
 
         self.device = T.device("cuda" if T.cuda.is_available() else "cpu")
 
-        # _agent_obs_shapes and _agent_use_encoder are expected to be set by subclass before this call
+        # Subclass must set self._agent_obs_shapes_or_space and self._agent_use_encoder (if applicable)
+        # BEFORE super().__init__() calls _get_obs_shapes_for_buffer()
         obs_shapes_for_buffer_dict = self._get_obs_shapes_for_buffer()
 
         if action_shape is None:
@@ -51,8 +49,8 @@ class BaseAgent(ABC):
                                    action_dtype=action_dtype,
                                    aux_data_specs=aux_data_specs)
 
-        self.writer = None  # This will be set by the Trainer
-        self.learn_step_counter = 0  # Counts critic gradient steps / main learning steps
+        self.writer = None  # Set by Trainer
+        self.learn_step_counter = 0  # Counts main learning/gradient steps (often critic updates)
 
         self.actor = None
         self.critic_1, self.critic_2 = None, None
@@ -74,16 +72,13 @@ class BaseAgent(ABC):
             'action_dtype_buffer': str(action_dtype),
             'aux_data_specs_buffer': str(aux_data_specs)
         }
-        # Subclasses must call self._setup_networks() after setting their specific attributes
 
     @abstractmethod
     def _get_obs_shapes_for_buffer(self):
-        """Implemented by subclasses to provide obs_space_dict for ReplayBuffer."""
         pass
 
     @abstractmethod
     def _setup_networks(self):
-        """Implemented by subclasses to initialize actor, critic, alpha."""
         pass
 
     @abstractmethod
@@ -116,26 +111,24 @@ class BaseAgent(ABC):
         pass
 
     def remember(self, state_dict_or_flat, action, reward, new_state_dict_or_flat, done, aux_data=None):
-        # Convert to dicts if flat, matching _get_obs_shapes_for_buffer structure
-        obs_buffer_keys = list(self._get_obs_shapes_for_buffer().keys())
+        obs_buffer_format = self._get_obs_shapes_for_buffer()
+        obs_buffer_keys = list(obs_buffer_format.keys())
 
+        state_to_store = state_dict_or_flat
         if not isinstance(state_dict_or_flat, dict):
             if len(obs_buffer_keys) == 1:
-                state_dict_to_store = {obs_buffer_keys[0]: state_dict_or_flat}
+                state_to_store = {obs_buffer_keys[0]: state_dict_or_flat}
             else:
-                raise ValueError("Flat state provided but buffer expects multiple obs keys.")
-        else:
-            state_dict_to_store = state_dict_or_flat
+                raise ValueError(f"Flat state provided but buffer expects dict with keys: {obs_buffer_keys}")
 
+        new_state_to_store = new_state_dict_or_flat
         if not isinstance(new_state_dict_or_flat, dict):
             if len(obs_buffer_keys) == 1:
-                new_state_dict_to_store = {obs_buffer_keys[0]: new_state_dict_or_flat}
+                new_state_to_store = {obs_buffer_keys[0]: new_state_dict_or_flat}
             else:
-                raise ValueError("Flat new_state provided but buffer expects multiple obs keys.")
-        else:
-            new_state_dict_to_store = new_state_dict_or_flat
+                raise ValueError(f"Flat new_state provided but buffer expects dict with keys: {obs_buffer_keys}")
 
-        self.memory.store_transition(state_dict_to_store, action, reward, new_state_dict_to_store, done, aux_data)
+        self.memory.store_transition(state_to_store, action, reward, new_state_to_store, done, aux_data)
 
     def update_target_networks(self, tau=None):
         if tau is None: tau = self.tau
@@ -150,14 +143,13 @@ class BaseAgent(ABC):
         if self.actor is None:
             print("Agent models not initialized, cannot save.")
             return
-        print(f"... saving {'best ' if best_model else ''}models in {self.chkpt_dir} ...")
+        # print(f"... saving {'best ' if best_model else ''}models in {self.chkpt_dir} ...") # Less verbose
         suffix = "_best" if best_model else ""
         if hasattr(self.actor, 'save_checkpoint'): self.actor.save_checkpoint(suffix=suffix)
         if hasattr(self.critic_1, 'save_checkpoint'): self.critic_1.save_checkpoint(suffix=suffix)
         if hasattr(self.critic_2, 'save_checkpoint'): self.critic_2.save_checkpoint(suffix=suffix)
 
     def load_models(self, best_model=False):
-        # Ensure networks are created before trying to load state dicts
         if self.actor is None: self._setup_networks()
 
         print(f"... loading {'best ' if best_model else ''}models from {self.chkpt_dir} ...")
@@ -173,6 +165,6 @@ class BaseAgent(ABC):
                 self.target_critic_2.load_state_dict(self.critic_2.state_dict())
             print("Models loaded successfully.")
         except FileNotFoundError as e:
-            print(f"Error loading models: {e}. Checkpoint files might be missing.")
+            print(f"Error loading models: {e}. Checkpoint files might be missing for suffix '{suffix}'.")
         except Exception as e:
             print(f"An unexpected error occurred during model loading: {e}")

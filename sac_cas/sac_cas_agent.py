@@ -35,11 +35,16 @@ class SacCasAgent(BaseAgent):
             gradient_steps=1,
             policy_delay=2,
             max_grad_norm=None,
+            hidden_dims_actor_body: list = None,  # Add here
+            hidden_dims_critic_body: list = None,  # Add here
             chkpt_dir="tmp/sac_cas",
             log_dir="runs/sac_cas"):  # log_dir for agent's own writer if BaseAgent doesn't get one from Trainer
 
         if not isinstance(env.action_space, gym.spaces.Box) or len(env.action_space.shape) != 1:
             raise ValueError("SacCasAgent expects a flat Box action space (e.g., shape (act_dim,)).")
+
+        self._hidden_dims_actor_body = hidden_dims_actor_body if hidden_dims_actor_body is not None else [256, 256]
+        self._hidden_dims_critic_body = hidden_dims_critic_body if hidden_dims_critic_body is not None else [256, 256]
 
         self.n_actions = env.action_space.shape[0]
         action_shape_for_buffer = (self.n_actions, )
