@@ -6,8 +6,8 @@ import torch.nn.functional as F
 from torch.distributions import Normal
 import gymnasium as gym
 
-from core.base_agent import BaseAgent
-from core.base_networks import SimpleMLPEncoder, IdentityEncoder  # Encoders from core
+from ..core.base_agent import BaseAgent
+from ..core.base_networks import SimpleMLPEncoder, IdentityEncoder  # Encoders from core
 from .networks import ActorNetworkContinuous, CriticNetworkContinuous
 # If FeatureEncoderForContinuousSAC is in a separate encoders.py within sac_cas:
 # from .encoders.feature_encoders_cas import FeatureEncoderForContinuousSAC
@@ -60,7 +60,6 @@ class SacCasAgent(BaseAgent):
                          policy_delay=policy_delay,
                          max_grad_norm=max_grad_norm,
                          chkpt_dir=chkpt_dir,
-                         log_dir=log_dir,
                          action_shape=action_shape_for_buffer,
                          action_dtype=action_dtype_for_buffer,
                          aux_data_specs=None)

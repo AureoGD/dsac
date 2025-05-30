@@ -17,22 +17,26 @@ def init_layer(layer, std=np.sqrt(2), bias_const=0.0):
 
 
 class MLP(nn.Module):
-    """
-    Simple Multi-Layer Perceptron.
-    """
 
-    def __init__(self, input_dim, output_dim, hidden_dims=[256, 256], activation=nn.ReLU, output_activation=None):
+    def __init__(
+        self,
+        input_dim,
+        output_dim,
+        hidden_dims=[256, 256],
+        activation=nn.ReLU,  # Expects a class for hidden layers
+        output_activation_instance=None):  # Expects an INSTANCE for the output layer, or None
         super().__init__()
         layers = []
         current_dim = input_dim
         for hidden_dim in hidden_dims:
             layers.append(init_layer(nn.Linear(current_dim, hidden_dim)))
-            layers.append(activation())
+            if activation:  # activation is a class
+                layers.append(activation())  # Instantiate for hidden layers
             current_dim = hidden_dim
 
         layers.append(init_layer(nn.Linear(current_dim, output_dim)))
-        if output_activation:
-            layers.append(output_activation())
+        if output_activation_instance:  # output_activation_instance is already an instance
+            layers.append(output_activation_instance)  # Add the instance directly
 
         self.mlp = nn.Sequential(*layers)
 
@@ -84,13 +88,17 @@ class SimpleMLPEncoder(BaseEncoder):
         if not hidden_dims_encoder:
             self.mlp_encoder = nn.Identity()
             self._output_dim = self._input_dim
-        else:
-            self.mlp_encoder = MLP(input_dim=self._input_dim,
-                                   output_dim=hidden_dims_encoder[-1],
-                                   hidden_dims=hidden_dims_encoder[:-1],
-                                   activation=activation,
-                                   output_activation=activation())  # Activation after last hidden
+        elif hidden_dims_encoder:  # Only build MLP if hidden_dims_encoder are specified
+            self.mlp_encoder = MLP(
+                input_dim=self._input_dim,
+                output_dim=hidden_dims_encoder[-1],
+                hidden_dims=hidden_dims_encoder[:-1],  # Hidden layers for this MLP
+                activation=activation,  # Pass class for MLP's hidden layers
+                output_activation_instance=activation() if activation else None)  # Instance for MLP's output
             self._output_dim = hidden_dims_encoder[-1]
+        else:  # No hidden layers, effectively an Identity
+            self.mlp_encoder = nn.Identity()
+            self._output_dim = self._input_dim
 
     @property
     def output_dim(self):

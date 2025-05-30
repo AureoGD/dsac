@@ -20,7 +20,7 @@ class BaseCallback:
         self.verbose = verbose
         self.trainer = None  # type: Trainer
         self.agent = None  # type: BaseAgent
-        self.logger = None  # type: SummaryWriter # For callbacks to use the same logger
+        self.logger = None  # type: SummaryWriter
 
     def _on_training_start(self):
         """Called before the first episode of training."""
@@ -71,45 +71,41 @@ class BaseCallback:
 class Trainer:
 
     def __init__(
-            self,
-            agent_class,  # The actual agent class to instantiate (e.g., SacCasAgent)
-            env: gym.Env,
-            eval_env: gym.Env = None,
-            # Training loop parameters
-            training_total_timesteps: int = 100000,
-            max_steps_per_episode: int = 1000,
-            # Logging, Saving, Evaluation
-            log_interval_timesteps: int = 2048,
-            eval_frequency_timesteps: int = 10000,
-            n_eval_episodes: int = 5,
-            log_root: str = "runs_dsac",
-            model_root: str = "models_dsac",
-            save_freq_episodes: int = 100,
-            callback=None,  # Can be a single BaseCallback instance or a list of them
-            # Agent Hyperparameters to be passed to agent_class constructor
-            # These are collected into agent_constructor_hparams
+        self,
+        agent_class,
+        env: gym.Env,
+        eval_env: gym.Env = None,
+        training_total_timesteps: int = 100000,
+        max_steps_per_episode: int = 1000,
+        log_interval_timesteps: int = 2048,
+        eval_frequency_timesteps: int = 10000,
+        n_eval_episodes: int = 5,
+        log_root: str = "runs_dsac",
+        model_root: str = "models_dsac",
+        save_freq_episodes: int = 100,
+        callback=None,
         obs_shapes_or_space=None,
-            use_encoder: bool = False,
-            encoder_mlp_hidden_dims: list = None,  # Example: [64, 64]
-            gamma: float = 0.99,
-            tau: float = 0.005,
-            alpha_init="auto",
-            critic_lr: float = 3e-4,
-            actor_lr: float = 3e-4,
-            replay_buffer_size: int = 1_000_000,
-            batch_size: int = 256,
-            learning_starts: int = 100,
-            gradient_steps: int = 1,
-            policy_delay: int = 2,
-            max_grad_norm: float = None,
-            reward_scale: float = 1.0,
-            action_spec_for_buffer: tuple = None,  # e.g., ((action_dim,), np.float32) or ((), np.int64)
-            aux_data_specs_for_buffer: dict = None,
-            agent_specific_kwargs: dict = None,  # For any other agent HPs
+        use_encoder: bool = False,
+        encoder_mlp_hidden_dims: list = None,
+        gamma: float = 0.99,
+        tau: float = 0.005,
+        alpha_init="auto",
+        critic_lr: float = 3e-4,
+        actor_lr: float = 3e-4,
+        replay_buffer_size: int = 1_000_000,
+        batch_size: int = 256,
+        learning_starts: int = 100,
+        gradient_steps: int = 1,
+        policy_delay: int = 2,
+        max_grad_norm: float = None,
+        reward_scale: float = 1.0,
+        action_spec_for_buffer: tuple = None,
+        aux_data_specs_for_buffer: dict = None,
+        agent_specific_kwargs: dict = None,
     ):
         self.agent_class = agent_class
         self.env = env
-        self.eval_env = eval_env if eval_env is not None else env  # Default to training env for eval
+        self.eval_env = eval_env if eval_env is not None else env
 
         try:
             self.env_name = self.env.spec.id if self.env.spec else "UnknownEnv"
@@ -119,7 +115,6 @@ class Trainer:
 
         self.training_total_timesteps = int(training_total_timesteps)
         self.max_steps_per_episode = int(max_steps_per_episode)
-
         self.log_interval_timesteps = int(log_interval_timesteps)
         self.eval_frequency_timesteps = int(eval_frequency_timesteps)
         self.n_eval_episodes = int(n_eval_episodes)
@@ -148,9 +143,9 @@ class Trainer:
 
         self.agent_constructor_hparams = {
             'env': self.env,
-            'obs_shapes': obs_shapes_or_space,
+            'obs_shapes_or_space': obs_shapes_or_space,
             'use_encoder': use_encoder,
-            'encoder_mlp_hidden_dims': encoder_mlp_hidden_dims or [],  # Ensure it's a list for agent
+            'encoder_mlp_hidden_dims': encoder_mlp_hidden_dims or [],
             'gamma': gamma,
             'tau': tau,
             'alpha_init': alpha_init,
@@ -174,7 +169,7 @@ class Trainer:
         self.agent: BaseAgent = self._setup_agent_instance()
         if hasattr(self.agent, 'writer') and self.agent.writer is not None:
             if self.agent.writer != self.writer: self.agent.writer.close()
-            self.agent.writer = self.writer  # Agent uses Trainer's writer
+            self.agent.writer = self.writer
 
         self._save_hyperparameters()
 
@@ -199,13 +194,13 @@ class Trainer:
     def _save_hyperparameters(self):
         agent_constructor_serializable = {k: v for k, v in self.agent_constructor_hparams.items() if k != 'env'}
         for k, v in agent_constructor_serializable.items():
-            if isinstance(v, (np.ndarray, gym.spaces.Space, tuple)) and k not in ['obs_shapes', 'action_shape']:
+            if isinstance(v, type):
                 agent_constructor_serializable[k] = str(v)
-            elif k == 'obs_shapes' and isinstance(v, gym.spaces.Dict):
+            elif isinstance(v, gym.spaces.Dict) and k == 'obs_shapes_or_space':
                 agent_constructor_serializable[k] = {key_s: str(sp.shape) for key_s, sp in v.spaces.items()}
-            elif k == 'obs_shapes' and not isinstance(v, str):
+            elif isinstance(v, (np.ndarray, gym.spaces.Space, tuple)) and k not in ['action_shape']:
                 agent_constructor_serializable[k] = str(v)
-            elif k == 'action_shape' and not isinstance(v, str):
+            elif isinstance(v, tuple) and not isinstance(v, str):
                 agent_constructor_serializable[k] = str(v)
 
         all_hparams = {
@@ -218,37 +213,30 @@ class Trainer:
             with open(filepath, 'w') as f:
                 json.dump(all_hparams, f, indent=4, sort_keys=True)
         except TypeError as e:
-            print(f"Warning: Could not serialize all HPs to JSON: {e}\n{all_hparams}")
+            print(f"Warning: Could not serialize all HPs to JSON: {e}")
+            print(f"Problematic HPs (agent_constructor_serializable dump):")
+            for key, val in agent_constructor_serializable.items():
+                print(f"  {key}: {val} (type: {type(val)})")
+        except Exception as e_gen:
+            print(f"An unexpected error occurred during HP saving: {e_gen}")
 
     def _setup_agent_instance(self):
-        kwargs_for_agent = {k: v for k, v in self.agent_constructor_hparams.items()}
-        # Agent class specific handling for obs_shapes if it's not named 'obs_shapes' in its __init__
-        # BaseAgent expects obs_shapes via _get_obs_shapes_for_buffer called by its __init__.
-        # The concrete agent (e.g. SacCasAgent) takes obs_shapes (or obs_shapes_or_space) directly.
-        if 'obs_shapes_or_space' in kwargs_for_agent and 'obs_shapes' not in self.agent_class.__init__.__code__.co_varnames:
-            kwargs_for_agent['obs_shapes'] = kwargs_for_agent.pop('obs_shapes_or_space')
-        elif 'obs_shapes_or_space' in kwargs_for_agent and 'obs_shapes_or_space' in self.agent_class.__init__.__code__.co_varnames:
-            pass  # It's named correctly
-        elif 'obs_shapes' not in kwargs_for_agent and 'obs_shapes_or_space' in kwargs_for_agent:
-            # If agent expects 'obs_shapes' but we have 'obs_shapes_or_space'
-            kwargs_for_agent['obs_shapes'] = kwargs_for_agent.pop('obs_shapes_or_space')
-
-        # Filter out keys that the specific agent class __init__ doesn't expect
-        # to avoid TypeError for unexpected keyword arguments.
-        valid_agent_params = self.agent_class.__init__.__code__.co_varnames
+        kwargs_for_agent = dict(self.agent_constructor_hparams)
+        valid_agent_params = list(self.agent_class.__init__.__code__.co_varnames)
+        if 'env' in valid_agent_params and 'env' not in kwargs_for_agent:
+            kwargs_for_agent['env'] = self.env
         filtered_kwargs_for_agent = {k: v for k, v in kwargs_for_agent.items() if k in valid_agent_params}
-
-        # Add back 'env' if it was filtered but is needed (most agents need it)
-        if 'env' not in filtered_kwargs_for_agent and 'env' in valid_agent_params:
-            filtered_kwargs_for_agent['env'] = self.env
-
+        if 'obs_shapes_or_space' not in filtered_kwargs_for_agent and \
+           'obs_shapes_or_space' in valid_agent_params and \
+           'obs_shapes_or_space' in kwargs_for_agent:
+            filtered_kwargs_for_agent['obs_shapes_or_space'] = kwargs_for_agent['obs_shapes_or_space']
         agent_instance = self.agent_class(**filtered_kwargs_for_agent)
         return agent_instance
 
     def _call_callbacks(self, event_method_name):
         continue_training = True
-        for callback in self._callbacks:
-            method = getattr(callback, event_method_name, None)
+        for callback_instance in self._callbacks:
+            method = getattr(callback_instance, event_method_name, None)
             if method and not method(): continue_training = False
         return continue_training
 
@@ -258,20 +246,19 @@ class Trainer:
 
     def _accumulate_train_metrics(self):
         steps_in_learn = self.agent.gradient_steps
-        if not np.isnan(self.agent.last_actor_loss):
+        if hasattr(self.agent, 'last_actor_loss') and not np.isnan(self.agent.last_actor_loss):
             self._train_metric_accumulators["actor_loss"] += self.agent.last_actor_loss * steps_in_learn
             self._train_metric_counts["actor_loss"] += steps_in_learn
-        if not np.isnan(self.agent.last_critic_loss):
+        if hasattr(self.agent, 'last_critic_loss') and not np.isnan(self.agent.last_critic_loss):
             self._train_metric_accumulators["critic_loss"] += self.agent.last_critic_loss * steps_in_learn
             self._train_metric_counts["critic_loss"] += steps_in_learn
-        if hasattr(self.agent,
-                   'entropy_tuning') and self.agent.entropy_tuning and not np.isnan(self.agent.last_ent_coef_loss):
+        if hasattr(self.agent,'entropy_tuning') and self.agent.entropy_tuning and \
+           hasattr(self.agent, 'last_ent_coef_loss') and not np.isnan(self.agent.last_ent_coef_loss):
             self._train_metric_accumulators["ent_coef_loss"] += self.agent.last_ent_coef_loss * steps_in_learn
             self._train_metric_counts["ent_coef_loss"] += steps_in_learn
 
     def _run_evaluation(self):
         if self.n_eval_episodes <= 0: return
-        # print(f"\nRunning evaluation at timestep {self.total_timesteps}...")
         eval_rewards, eval_lengths = [], []
         for _ in range(self.n_eval_episodes):
             obs, _ = self.eval_env.reset()
@@ -289,16 +276,21 @@ class Trainer:
         mean_reward, mean_length = np.mean(eval_rewards), np.mean(eval_lengths)
         self.writer.add_scalar("eval/mean_reward", mean_reward, self.total_timesteps)
         self.writer.add_scalar("eval/mean_episode_length", mean_length, self.total_timesteps)
+
         if mean_reward > self.best_mean_eval_reward:
             print(
                 f"Eval: New best eval reward: {mean_reward:.2f} (old: {self.best_mean_eval_reward:.2f}). Saving best model..."
             )
             self.best_mean_eval_reward = mean_reward
             self.agent.save_models(best_model=True)
+        # else: print(f"Eval: Mean Reward: {mean_reward:.2f}, Mean Length: {mean_length:.2f}") # Less verbose
         self.last_eval_timestep = self.total_timesteps
 
     def _log_terminal_summary(self, mean_rollout_reward, mean_rollout_length, interval_fps, total_time_elapsed):
-        LABEL_WIDTH, VALUE_WIDTH, TOTAL_WIDTH = 27, 15, 52
+        LABEL_CONTENT_WIDTH = 23
+        VALUE_CONTENT_WIDTH = 12
+        TOTAL_LINE_WIDTH = LABEL_CONTENT_WIDTH + VALUE_CONTENT_WIDTH + 7
+
         actor_loss_val, critic_loss_val, ent_coef_loss_val = np.nan, np.nan, np.nan
         if self._train_metric_counts.get("actor_loss", 0) > 0:
             actor_loss_val = self._train_metric_accumulators["actor_loss"] / self._train_metric_counts["actor_loss"]
@@ -315,27 +307,51 @@ class Trainer:
                 self.agent.actor, 'optimizer') and self.agent.actor.optimizer.param_groups else np.nan
         n_updates_val = self.agent.learn_step_counter if hasattr(self.agent, 'learn_step_counter') else np.nan
 
-        print("\n" + "-" * TOTAL_WIDTH)
-        print(f"| {f'Section/Metric':<{LABEL_WIDTH}} | {f'Value':>{VALUE_WIDTH}} |")
-        print(f"|{'':-<{LABEL_WIDTH+1}}|{'':-<{VALUE_WIDTH+2}}|")
-        print(f"| {f'rollout/':<{LABEL_WIDTH}} | {'':>{VALUE_WIDTH}} |")
-        print(f"| {f'  ep_len_mean':<{LABEL_WIDTH}} | {mean_rollout_length:>{VALUE_WIDTH}.2f} |")
-        print(f"| {f'  ep_rew_mean':<{LABEL_WIDTH}} | {mean_rollout_reward:>{VALUE_WIDTH}.2e} |")
-        print(f"|{'':-<{LABEL_WIDTH+1}}|{'':-<{VALUE_WIDTH+2}}|")
-        print(f"| {f'time/':<{LABEL_WIDTH}} | {'':>{VALUE_WIDTH}} |")
-        print(f"| {f'  episodes':<{LABEL_WIDTH}} | {self.total_episodes_completed:>{VALUE_WIDTH}d} |")
-        print(f"| {f'  fps':<{LABEL_WIDTH}} | {interval_fps:>{VALUE_WIDTH}d} |")
-        print(f"| {f'  time_elapsed':<{LABEL_WIDTH}} | {int(total_time_elapsed):>{VALUE_WIDTH}d} |")
-        print(f"| {f'  total_timesteps':<{LABEL_WIDTH}} | {self.total_timesteps:>{VALUE_WIDTH}d} |")
-        print(f"|{'':-<{LABEL_WIDTH+1}}|{'':-<{VALUE_WIDTH+2}}|")
-        print(f"| {f'train/':<{LABEL_WIDTH}} | {'':>{VALUE_WIDTH}} |")
-        print(f"| {f'  actor_loss':<{LABEL_WIDTH}} | {actor_loss_val:>{VALUE_WIDTH}.3f} |")
-        print(f"| {f'  critic_loss':<{LABEL_WIDTH}} | {critic_loss_val:>{VALUE_WIDTH}.3f} |")
-        print(f"| {f'  ent_coef':<{LABEL_WIDTH}} | {ent_coef_val:>{VALUE_WIDTH}.5f} |")
-        print(f"| {f'  ent_coef_loss':<{LABEL_WIDTH}} | {ent_coef_loss_val:>{VALUE_WIDTH}.3f} |")
-        print(f"| {f'  learning_rate':<{LABEL_WIDTH}} | {actor_lr_val:>{VALUE_WIDTH}.2e} |")
-        print(f"| {f'  n_updates':<{LABEL_WIDTH}} | {n_updates_val:>{VALUE_WIDTH}d} |")
-        print("-" * TOTAL_WIDTH)
+        def format_label_cell(text, indent_level=0):
+            return f"{'  '*indent_level}{text}".ljust(LABEL_CONTENT_WIDTH)
+
+        def format_value_cell(value, precision_format_char):
+            # Check if value is a string first (like the "Value" header or empty string for section rows)
+            if isinstance(value, str):
+                val_str = value  # Keep it as is for simple string values
+            # Check for actual numeric types that could be NaN
+            elif isinstance(value,
+                            (int, float, np.number)) and np.isnan(value):  # np.number covers numpy int/float types
+                val_str = "nan"
+            # Proceed with numeric formatting if not a string and not NaN
+            elif precision_format_char == 'd':  # Integer
+                # Ensure value is convertible to int if it's not already NaN
+                val_str = f"{int(value):d}" if not (isinstance(value, float) and np.isnan(value)) else "nan"
+            elif 'e' in precision_format_char:  # Scientific
+                val_str = f"{value:{precision_format_char}}" if not (isinstance(value, float)
+                                                                     and np.isnan(value)) else "nan"
+            else:  # Default to float with specified precision (e.g., .2f, .3f, .5f)
+                val_str = f"{value:{precision_format_char}}" if not (isinstance(value, float)
+                                                                     and np.isnan(value)) else "nan"
+
+            return val_str.rjust(VALUE_CONTENT_WIDTH)
+
+        print("\n" + "-" * TOTAL_LINE_WIDTH)
+        print(f"| {format_label_cell('Section/Metric')} | {format_value_cell('Value', '')} |")
+        line_sep = f"|{'-'*(LABEL_CONTENT_WIDTH + 2)}|{'-'*(VALUE_CONTENT_WIDTH + 2)}|"
+        print(line_sep)
+
+        sections = {
+            "rollout/": [("ep_len_mean", mean_rollout_length, '.2f'), ("ep_rew_mean", mean_rollout_reward, '.2e')],
+            "time/": [("episodes", self.total_episodes_completed, 'd'), ("fps", interval_fps, 'd'),
+                      ("time_elapsed", int(total_time_elapsed), 'd'), ("total_timesteps", self.total_timesteps, 'd')],
+            "train/": [("actor_loss", actor_loss_val, '.3f'), ("critic_loss", critic_loss_val, '.3f'),
+                       ("ent_coef", ent_coef_val, '.5f'), ("ent_coef_loss", ent_coef_loss_val, '.3f'),
+                       ("learning_rate", actor_lr_val, '.1e'), ("n_updates", n_updates_val, 'd')]
+        }
+        for section_name, metrics in sections.items():
+            print(f"| {format_label_cell(section_name)} | {format_value_cell('', '')} |")
+            for label_text, value, specific_format_char in metrics:
+                print(
+                    f"| {format_label_cell(label_text, indent_level=1)} | {format_value_cell(value, specific_format_char)} |"
+                )
+            if section_name != list(sections.keys())[-1]: print(line_sep)
+        print("-" * TOTAL_LINE_WIDTH)
 
     def train(self):
         self.start_time = time.time()
@@ -353,20 +369,20 @@ class Trainer:
             current_episode_num += 1
             self.total_episodes_completed = current_episode_num
             if not self._call_callbacks('on_episode_start'): break
-            observation, info = self.env.reset()  # Get info dict
+            observation, info = self.env.reset()
             done, episode_reward, episode_steps = False, 0, 0
 
             while not done and episode_steps < self.max_steps_per_episode and self.total_timesteps < self.training_total_timesteps:
                 action = self.agent.choose_action(observation, evaluate=False)
-                next_observation, reward, terminated, truncated, info = self.env.step(action)
+                next_observation, reward, terminated, truncated, info_step = self.env.step(action)
                 done = terminated or truncated
 
-                # Prepare observation dict for remember, matching ReplayBuffer's expectation
-                obs_for_buffer = observation if isinstance(observation, dict) else {"obs": observation}
-                next_obs_for_buffer = next_observation if isinstance(next_observation, dict) else {
-                    "obs": next_observation
+                obs_buffer_keys = list(self.agent._get_obs_shapes_for_buffer().keys())
+                current_obs_dict = observation if isinstance(observation, dict) else {obs_buffer_keys[0]: observation}
+                next_obs_dict = next_observation if isinstance(next_observation, dict) else {
+                    obs_buffer_keys[0]: next_observation
                 }
-                self.agent.remember(obs_for_buffer, action, reward, next_obs_for_buffer, done)
+                self.agent.remember(current_obs_dict, action, reward, next_obs_dict, done)
 
                 self.total_timesteps += 1
                 episode_steps += 1
@@ -449,7 +465,7 @@ class Trainer:
                                                                           >= self.max_steps_per_episode):
                 break
 
-        self._call_callbacks('on_training_end')  # Ensure training end is called
+        self._call_callbacks('on_training_end')
         self.close()
 
     def close(self):

@@ -11,14 +11,14 @@ log_interval_timesteps: 2000
 eval_frequency_timesteps: 5000  
 n_eval_episodes: 5              
 save_freq_episodes: 50         
-log_root: "runs_dsac_pendulum"     
-model_root: "models_dsac_pendulum"   
+log_root: "dsac/data/runs/sac"     
+model_root: "dsac/data/models/sac"   
 
 # Agent Hyperparameters (passed to Trainer, then to SacCasAgent constructor)
 # obs_shapes_or_space will be set by run_experiment.py from env.observation_space.shape
 # action_spec_for_buffer will be set by run_experiment.py from env.action_space
 use_encoder: False              # Crucial for using simple MLP/Identity encoder
-encoder_mlp_hidden_dims: [64, 64] # Optional: for the SimpleMLPEncoder if obs are flat
+encoder_mlp_hidden_dims: [] # Optional: for the SimpleMLPEncoder if obs are flat
                                  # Or set to [] for Identity-like behavior if MLP is in main net body
 gamma: 0.99                     
 tau: 0.005                      

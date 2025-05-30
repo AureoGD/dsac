@@ -6,8 +6,8 @@ import importlib
 import numpy as np
 
 # Assuming Trainer and BaseAgent are in core
-from core.trainer import Trainer
-from core.base_agent import BaseAgent  # For type hinting if needed
+from .core.trainer import Trainer
+from .core.base_agent import BaseAgent  # For type hinting if needed
 
 
 def load_config(config_path="configs/continuous_sac_pendulum.yaml"):  # Default to an example config
